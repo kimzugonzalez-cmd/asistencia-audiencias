@@ -8,8 +8,8 @@
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%231e3a5f'/%3E%3Ctext y='68' x='50' font-size='58' text-anchor='middle' fill='white'%3E%F0%9F%93%8B%3C/text%3E%3C/svg%3E">
 <style>
   :root{
-    --azul:#1e3a5f; --azul-claro:#2c5282; --borde:#cbd5e1; --fondo:#f1f5f9;
-    --texto:#0f172a; --meta:#64748b; --ok:#15803d; --error:#b91c1c; --aviso:#b45309;
+    --azul:#1e3a5f; --borde:#cbd5e1; --fondo:#f1f5f9; --texto:#0f172a;
+    --meta:#64748b; --ok:#15803d; --error:#b91c1c; --aviso:#b45309;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--fondo);color:var(--texto);
@@ -27,31 +27,40 @@
   button{border:none;border-radius:8px;padding:.85rem 1rem;font-weight:600;cursor:pointer}
   .primario{background:var(--azul);color:#fff;width:100%}
   .secundario{background:#fff;color:var(--azul);border:1px solid var(--azul);width:100%}
-  .peligro{background:#fff;color:var(--error);border:1px solid var(--error)}
   .grande{padding:1.15rem;font-size:1.1rem}
   .botones{display:flex;flex-direction:column;gap:.6rem;margin-top:.9rem}
   .fila{display:flex;gap:.6rem}
   .fila>*{flex:1}
   .meta{color:var(--meta);font-size:.85rem;line-height:1.45}
   .oculto{display:none !important}
-  #reader{margin-top:.9rem;border-radius:10px;overflow:hidden}
-  #reader video{width:100% !important;border-radius:10px}
-  .aviso{background:#fffbeb;border:1px solid #fcd34d;color:var(--aviso);
-         padding:.7rem;border-radius:8px;font-size:.88rem;line-height:1.45}
-  .exito-box{background:#f0fdf4;border:1px solid #86efac;color:var(--ok);
-             padding:.7rem;border-radius:8px;font-size:.88rem}
+
+  /* ---- visor de cámara ---- */
+  #visor{position:relative;margin-top:.9rem;border-radius:10px;overflow:hidden;background:#000}
+  #video{width:100%;display:block}
+  #guia{position:absolute;inset:0;pointer-events:none}
+  /* Proporción de cédula: se encuadra la tarjeta completa y se leen sus dos códigos. */
+  #guia .marco{position:absolute;left:5%;right:5%;top:50%;transform:translateY(-50%);
+               aspect-ratio:1.58/1;border:3px solid rgba(255,255,255,.9);border-radius:10px;
+               box-shadow:0 0 0 100vmax rgba(0,0,0,.3)}
+  #estadoEscaneo{position:absolute;left:0;right:0;bottom:0;background:rgba(15,23,42,.75);
+                 color:#fff;font-size:.82rem;padding:.5rem .7rem;text-align:center}
+  #lectorArchivo{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+
   .item{display:flex;justify-content:space-between;align-items:center;gap:.7rem;
         padding:.7rem 0;border-bottom:1px solid #e2e8f0}
   .item:last-child{border-bottom:none}
   .item button{width:auto;padding:.5rem .8rem;font-size:.85rem}
-  .etiqueta{display:inline-block;padding:.15rem .5rem;border-radius:999px;font-size:.72rem;font-weight:600}
-  .etiqueta.si{background:#dcfce7;color:var(--ok)}
+  .aviso{background:#fffbeb;border:1px solid #fcd34d;color:var(--aviso);
+         padding:.7rem;border-radius:8px;font-size:.88rem;line-height:1.45}
+  .exito-box{background:#f0fdf4;border:1px solid #86efac;color:var(--ok);
+             padding:.7rem;border-radius:8px;font-size:.88rem}
   #toast{position:fixed;left:1rem;right:1rem;bottom:1rem;background:#0f172a;color:#fff;
          padding:.9rem 1rem;border-radius:10px;font-size:.92rem;line-height:1.4;
          opacity:0;transform:translateY(1rem);transition:.25s;pointer-events:none;z-index:50}
   #toast.mostrar{opacity:1;transform:none}
   #toast.exito{background:var(--ok)} #toast.error{background:var(--error)}
   .centro{text-align:center}
+  a{color:var(--azul)}
 </style>
 </head>
 <body>
@@ -63,10 +72,9 @@
 
 <main>
 
-  <!-- ===== PIN ===== -->
   <section id="pantallaPin" class="card">
     <h2>Acceso del operador</h2>
-    <p class="meta">Escribe el PIN que te dio la coordinación. Queda guardado en este teléfono; solo lo vuelves a escribir si cambian el PIN o si borras los datos del navegador.</p>
+    <p class="meta">Escribe el PIN que te dio la coordinación. Queda guardado en este teléfono.</p>
     <label for="pin">PIN</label>
     <input id="pin" type="tel" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="••••••">
     <label for="operador">Tu nombre (opcional)</label>
@@ -74,21 +82,36 @@
     <div class="botones"><button id="btnEntrar" class="primario grande">Entrar</button></div>
   </section>
 
-  <!-- ===== APP ===== -->
   <section id="pantallaApp" class="oculto">
 
     <div class="card">
       <h2>Caso activo en este punto de control</h2>
       <label for="selCaso">Selecciona el caso</label>
       <select id="selCaso"></select>
+
       <div class="botones">
         <button id="btnEscanear" class="primario grande">📷 Escanear cédula</button>
+        <button id="btnFoto" class="secundario">📸 Tomar foto del código</button>
         <button id="btnDetener" class="secundario oculto">Cancelar escaneo</button>
         <button id="btnLinterna" class="secundario oculto">🔦 Linterna</button>
         <button id="btnManual" class="secundario">✍️ Registro manual (sin cédula)</button>
       </div>
+
+      <div id="visor" class="oculto">
+        <video id="video" playsinline muted autoplay></video>
+        <div id="guia"><div class="marco"></div></div>
+        <div id="estadoEscaneo">Buscando el código…</div>
+      </div>
       <div id="reader"></div>
-      <p class="meta" id="ayudaEscaneo" style="margin-top:.7rem">Apunta al código de barras ancho del <strong>reverso</strong> de la cédula. Acerca hasta que ocupe casi todo el ancho del recuadro y mantén el pulso firme un par de segundos.</p>
+      <div id="lectorArchivo"></div>
+      <input type="file" id="archivoFoto" accept="image/*" capture="environment" class="oculto">
+
+      <p class="meta" id="ayudaEscaneo" style="margin-top:.7rem">
+        Encuadra el <strong>reverso de la cédula</strong> dentro del rectángulo. Se leen los dos códigos,
+        pero el que engancha más rápido es el <strong>QR de la esquina superior derecha</strong>: si tarda,
+        acerca el teléfono a ese QR. Toca la imagen para reenfocar y usa la linterna si hay poca luz.
+      </p>
+      <p class="meta" id="motorEscaneo" style="margin-top:.4rem"></p>
     </div>
 
     <div id="panelConfirmacion" class="card oculto">
@@ -140,7 +163,10 @@
       <div id="listaAbiertos" class="meta">Selecciona un caso…</div>
     </div>
 
-    <p class="meta centro"><a href="#" id="btnSalirPin" style="color:var(--meta)">Cambiar PIN u operador</a></p>
+    <p class="meta centro">
+      <a href="#" id="btnPegar">Pegar código a mano</a> ·
+      <a href="#" id="btnSalirPin">Cambiar PIN u operador</a>
+    </p>
   </section>
 
 </main>
@@ -152,368 +178,516 @@
 /* ==========================================================================
    Página de escaneo — Control de Asistencia a Audiencias
 
-   Existe por una limitación de Google: Apps Script sirve su app dentro de un
-   iframe cuya Permissions-Policy no incluye "camera", así que getUserMedia
-   siempre falla ahí. Esta página se aloja fuera de Google, abre la cámara sin
-   problema y conversa con el proyecto de Apps Script por POST.
+   Apps Script sirve su app dentro de un iframe cuya Permissions-Policy no
+   incluye "camera", así que la cámara no puede abrirse ahí. Esta página vive
+   fuera de Google y conversa con el proyecto por POST.
 
-   Lo único configurable es la URL de abajo. El PIN nunca se guarda aquí:
-   lo escribe el operador y lo valida el servidor en cada petición.
+   Sobre la velocidad de lectura: el PDF417 de la cédula es un código denso.
+   Cuando el navegador trae el lector nativo (BarcodeDetector, presente en
+   Chrome de Android), se usa DIRECTO sobre el cuadro completo de video a
+   resolución alta — es el camino rápido. Si no está (Safari de iPhone), se
+   cae al decodificador por software, que es lento, y por eso existe además
+   el botón de foto: una foto fija a full resolución se lee mucho mejor que
+   el video en vivo.
    ========================================================================== */
 
 const URL_API = 'https://script.google.com/macros/s/AKfycbxz4xj87tQo1fq1LBj6lhmNHy7KJOtc4QLNkFcxzvFs6lfthUOzumE8j9fhe6J_1nJX/exec';
 
 const $ = (id) => document.getElementById(id);
-let pin = '';
-let operador = '';
-let casos = [];
-let escaner = null;
-let linternaEncendida = false;
+let pin = '', operador = '', casos = [];
 let pendienteEntrada = null;
 
+/* estado del escaneo */
+let detector = null;          // BarcodeDetector nativo, si existe
+let stream = null;            // MediaStream del camino nativo
+let escaneando = false;
+let escanerRespaldo = null;   // instancia html5-qrcode (camino lento)
+let linterna = false;
+let inicioEscaneo = 0;
+let temporizador = null;
+
 /* ---------- utilidades ---------- */
-function escapeHtml(s) {
-  return (s === null || s === undefined ? '' : String(s))
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+function escapeHtml(s){return (s===null||s===undefined?'':String(s))
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 let toastTimer;
-function toast(msg, tipo) {
-  const el = $('toast');
-  el.textContent = msg;
-  el.className = 'mostrar' + (tipo ? ' ' + tipo : '');
+function toast(msg,tipo){
+  const el=$('toast'); el.textContent=msg;
+  el.className='mostrar'+(tipo?' '+tipo:'');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = ''; }, 5000);
+  toastTimer=setTimeout(()=>{el.className='';},5000);
 }
 
-function formatearHora(valor) {
-  if (!valor) return '—';
-  const d = new Date(valor);
-  if (isNaN(d.getTime())) return String(valor);
-  return d.toLocaleString('es-PA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+function formatearHora(v){
+  if(!v) return '—';
+  const d=new Date(v);
+  return isNaN(d.getTime())?String(v):d.toLocaleString('es-PA',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
 }
-
-function formatearFecha(valor) {
-  if (!valor) return '';
-  const iso = String(valor).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return iso ? iso[3] + '/' + iso[2] + '/' + iso[1] : String(valor);
+function formatearFecha(v){
+  if(!v) return '';
+  const m=String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m?m[3]+'/'+m[2]+'/'+m[1]:String(v);
 }
 
 /* ---------- puente con Apps Script ---------- */
-async function api(accion, extra) {
-  const cuerpo = Object.assign({ pin, operador, accion }, extra || {});
-  let respuesta;
-  try {
-    const r = await fetch(URL_API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(cuerpo)
+async function api(accion, extra){
+  let r;
+  try{
+    const resp = await fetch(URL_API,{
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify(Object.assign({pin,operador,accion},extra||{}))
     });
-    respuesta = await r.json();
-  } catch (e) {
-    throw new Error('Sin conexión con el servidor. Revisa la señal e intenta de nuevo.');
-  }
-  if (respuesta.pinInvalido) {
+    r = await resp.json();
+  }catch(e){ throw new Error('Sin conexión con el servidor. Revisa la señal.'); }
+  if(r.pinInvalido){
     localStorage.removeItem('pinEscaner');
     mostrarPantallaPin();
     throw new Error('El PIN ya no es válido. Pide el nuevo a la coordinación.');
   }
-  if (!respuesta.ok) throw new Error(respuesta.error || 'Error en el servidor.');
-  return respuesta.data;
+  if(!r.ok) throw new Error(r.error||'Error en el servidor.');
+  return r.data;
 }
 
 /* ---------- PIN ---------- */
-function mostrarPantallaPin() {
+function mostrarPantallaPin(){
   $('pantallaApp').classList.add('oculto');
   $('pantallaPin').classList.remove('oculto');
-  $('cabeceraSub').textContent = 'Sin sesión';
+  $('cabeceraSub').textContent='Sin sesión';
 }
 
-$('btnEntrar').addEventListener('click', async () => {
-  const valor = $('pin').value.trim();
-  if (!valor) return toast('Escribe el PIN.', 'error');
-  pin = valor;
-  operador = $('operador').value.trim();
-  try {
+$('btnEntrar').addEventListener('click', async ()=>{
+  const v=$('pin').value.trim();
+  if(!v) return toast('Escribe el PIN.','error');
+  pin=v; operador=$('operador').value.trim();
+  try{
     await api('ping');
-    localStorage.setItem('pinEscaner', pin);
-    localStorage.setItem('operadorEscaner', operador);
-    $('pin').value = '';
+    localStorage.setItem('pinEscaner',pin);
+    localStorage.setItem('operadorEscaner',operador);
+    $('pin').value='';
     await iniciarApp();
-  } catch (e) {
-    pin = '';
-    toast(e.message, 'error');
-  }
+  }catch(e){ pin=''; toast(e.message,'error'); }
 });
 
-$('btnSalirPin').addEventListener('click', (e) => {
+$('btnSalirPin').addEventListener('click',(e)=>{
   e.preventDefault();
-  localStorage.removeItem('pinEscaner');
-  pin = '';
+  localStorage.removeItem('pinEscaner'); pin='';
   mostrarPantallaPin();
 });
 
 /* ---------- arranque ---------- */
-async function iniciarApp() {
+async function iniciarApp(){
   $('pantallaPin').classList.add('oculto');
   $('pantallaApp').classList.remove('oculto');
 
-  const [listaCasos, tipos, turno] = await Promise.all([
+  const [lista,tipos,turno] = await Promise.all([
     api('listarCasos'), api('tiposSugeridos'), api('turnoActual')
   ]);
 
-  casos = listaCasos || [];
-  $('selCaso').innerHTML = '<option value="">— selecciona —</option>' + casos.map((c) =>
-    `<option value="${escapeHtml(c.idCaso)}">${escapeHtml(c.carpeta)} — ${escapeHtml(c.acusados || 'sin acusados')}</option>`
-  ).join('');
+  casos = lista||[];
+  $('selCaso').innerHTML='<option value="">— selecciona —</option>'+casos.map((c)=>
+    `<option value="${escapeHtml(c.idCaso)}">${escapeHtml(c.carpeta)} — ${escapeHtml(c.acusados||'sin acusados')}</option>`).join('');
+  const guardado=localStorage.getItem('casoEscaner');
+  if(guardado && casos.some((c)=>c.idCaso===guardado)) $('selCaso').value=guardado;
 
-  const guardado = localStorage.getItem('casoEscaner');
-  if (guardado && casos.some((c) => c.idCaso === guardado)) $('selCaso').value = guardado;
-
-  $('listaTipos').innerHTML = (tipos || []).map((t) => `<option value="${escapeHtml(t)}">`).join('');
+  $('listaTipos').innerHTML=(tipos||[]).map((t)=>`<option value="${escapeHtml(t)}">`).join('');
 
   const firma = turno && turno.nombre
-    ? 'Firma esta semana: ' + turno.nombre + ' (lun ' + formatearFecha(turno.inicio) + ' al dom ' + formatearFecha(turno.fin) + ')'
+    ? 'Firma esta semana: '+turno.nombre+' (lun '+formatearFecha(turno.inicio)+' al dom '+formatearFecha(turno.fin)+')'
     : '⚠ Sin coordinador(a) de turno definido para esta semana';
-  $('cabeceraSub').textContent = (operador ? operador + ' · ' : '') + firma;
+  $('cabeceraSub').textContent=(operador?operador+' · ':'')+firma;
 
+  await prepararDetector();
   await cargarAbiertos();
 }
 
-function idCaso() { return $('selCaso').value; }
+function idCaso(){ return $('selCaso').value; }
 
-$('selCaso').addEventListener('change', () => {
-  localStorage.setItem('casoEscaner', idCaso());
+$('selCaso').addEventListener('change',()=>{
+  localStorage.setItem('casoEscaner',idCaso());
   cargarAbiertos();
 });
 
 /* ---------- personas dentro ---------- */
-async function cargarAbiertos() {
-  const cont = $('listaAbiertos');
-  if (!idCaso()) { cont.innerHTML = 'Selecciona un caso…'; return; }
-  cont.textContent = 'Cargando…';
-  try {
-    const abiertos = (await api('listarAbiertos', { idCaso: idCaso() })) || [];
-    if (!abiertos.length) { cont.innerHTML = 'Nadie está registrado como dentro en este caso ahora mismo.'; return; }
-    cont.innerHTML = abiertos.map((r) => `
+async function cargarAbiertos(){
+  const cont=$('listaAbiertos');
+  if(!idCaso()){ cont.innerHTML='Selecciona un caso…'; return; }
+  cont.textContent='Cargando…';
+  try{
+    const abiertos=(await api('listarAbiertos',{idCaso:idCaso()}))||[];
+    if(!abiertos.length){ cont.innerHTML='Nadie está registrado como dentro en este caso ahora mismo.'; return; }
+    cont.innerHTML=abiertos.map((r)=>`
       <div class="item">
-        <div>
-          <strong>${escapeHtml(r.nombre)}</strong><br>
-          <span class="meta">${escapeHtml(r.tipo || '')} · entrada ${formatearHora(r.horaEntrada)}</span>
-        </div>
+        <div><strong>${escapeHtml(r.nombre)}</strong><br>
+          <span class="meta">${escapeHtml(r.tipo||'')} · entrada ${formatearHora(r.horaEntrada)}</span></div>
         <button class="secundario" data-id="${escapeHtml(r.idRegistro)}">Marcar salida</button>
       </div>`).join('');
-    cont.querySelectorAll('button[data-id]').forEach((b) => {
-      b.addEventListener('click', () => marcarSalida(b.dataset.id));
-    });
-  } catch (e) { cont.textContent = e.message; }
+    cont.querySelectorAll('button[data-id]').forEach((b)=>
+      b.addEventListener('click',()=>marcarSalida(b.dataset.id)));
+  }catch(e){ cont.textContent=e.message; }
 }
 
-async function marcarSalida(idRegistro) {
-  if (!confirm('¿Marcar la salida de esta persona ahora?')) return;
-  try {
-    const registro = await api('registrarSalidaPorId', { idRegistro });
-    toast('Salida registrada. Certificado generado.', 'exito');
-    if (registro && registro.certificadoUrl) window.open(registro.certificadoUrl, '_blank');
+async function marcarSalida(idRegistro){
+  if(!confirm('¿Marcar la salida de esta persona ahora?')) return;
+  try{
+    const reg=await api('registrarSalidaPorId',{idRegistro});
+    toast('Salida registrada. Certificado generado.','exito');
+    if(reg && reg.certificadoUrl) window.open(reg.certificadoUrl,'_blank');
     await cargarAbiertos();
-  } catch (e) { toast(e.message, 'error'); }
+  }catch(e){ toast(e.message,'error'); }
 }
 
-/* ---------- cámara ---------- */
-function formatosSoportados() {
-  if (typeof Html5QrcodeSupportedFormats === 'undefined') return undefined;
-  return [
-    Html5QrcodeSupportedFormats.PDF_417,
-    Html5QrcodeSupportedFormats.QR_CODE,
-    Html5QrcodeSupportedFormats.CODE_128
-  ];
+/* ==========================================================================
+   ESCANEO
+   ========================================================================== */
+
+/**
+ * La cédula panameña trae DOS códigos con la misma cadena de datos: el QR
+ * pequeño arriba a la derecha y el PDF417 ancho de abajo. Se buscan los dos a
+ * la vez y gana el que enganche primero — en la práctica casi siempre el QR,
+ * que se decodifica muchísimo más rápido que el PDF417.
+ */
+async function prepararDetector(){
+  const nota=$('motorEscaneo');
+  if('BarcodeDetector' in window){
+    try{
+      const soportados=await BarcodeDetector.getSupportedFormats();
+      const queremos=['qr_code','pdf417'].filter((f)=>soportados.indexOf(f)>-1);
+      if(queremos.length){
+        detector=new BarcodeDetector({formats:queremos});
+        nota.textContent='Lectura rápida activa (lector nativo del teléfono): '+queremos.join(' + ')+'.';
+        return;
+      }
+    }catch(e){/* sigue al respaldo */}
+  }
+  detector=null;
+  nota.innerHTML='Este navegador no trae lector nativo de códigos, así que la lectura en vivo es más lenta. '+
+                 'Si tarda, usa <strong>Tomar foto del código</strong>: suele leerlo al primer intento.';
 }
 
-/* El PDF417 es ancho y bajo: el recuadro de lectura se ajusta a esa forma. */
-function recuadro(anchoVista, altoVista) {
-  const ancho = Math.floor(Math.min(anchoVista, altoVista * 1.9) * 0.92);
-  return { width: ancho, height: Math.floor(ancho * 0.55) };
+function formatosSoportados(){
+  if(typeof Html5QrcodeSupportedFormats==='undefined') return undefined;
+  return [Html5QrcodeSupportedFormats.PDF_417, Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.CODE_128];
 }
 
-$('btnEscanear').addEventListener('click', async () => {
-  if (!idCaso()) return toast('Primero selecciona un caso.', 'error');
-  if (typeof Html5Qrcode === 'undefined') return toast('No cargó la librería de escaneo. Revisa la conexión y recarga.', 'error');
+function mostrarBotonesEscaneo(activo){
+  $('btnEscanear').classList.toggle('oculto',activo);
+  $('btnFoto').classList.toggle('oculto',activo);
+  $('btnManual').classList.toggle('oculto',activo);
+  $('btnDetener').classList.toggle('oculto',!activo);
+}
 
-  $('btnEscanear').classList.add('oculto');
-  $('btnDetener').classList.remove('oculto');
+$('btnEscanear').addEventListener('click',()=>{
+  if(!idCaso()) return toast('Primero selecciona un caso.','error');
+  detector ? iniciarNativo() : iniciarRespaldo();
+});
 
-  escaner = new Html5Qrcode('reader', { formatsToSupport: formatosSoportados(), verbose: false });
-  try {
-    await escaner.start(
-      { facingMode: 'environment' },
-      {
-        fps: 12,
-        qrbox: recuadro,
-        /* Resolución alta: el PDF417 de la cédula es denso y con 640px no engancha. */
-        videoConstraints: {
-          facingMode: 'environment',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          focusMode: 'continuous'
-        },
-        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+$('btnDetener').addEventListener('click',detenerEscaneo);
+
+/* ---------- camino rápido: BarcodeDetector sobre el video completo ---------- */
+async function iniciarNativo(){
+  mostrarBotonesEscaneo(true);
+  $('visor').classList.remove('oculto');
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:{ideal:'environment'},
+        width:{ideal:2560}, height:{ideal:1440}, frameRate:{ideal:30}
       },
-      (texto) => onCodigoLeido(texto),
-      () => {}
-    );
-    if (soportaLinterna()) $('btnLinterna').classList.remove('oculto');
-  } catch (e) {
+      audio:false
+    });
+  }catch(e){
     detenerEscaneo();
-    const msg = String(e && (e.message || e));
-    if (/NotAllowedError|Permission/i.test(msg)) {
-      toast('El navegador bloqueó la cámara. Ábrela en los permisos del sitio y vuelve a intentar.', 'error');
-    } else if (/NotFoundError|NotReadableError/i.test(msg)) {
-      toast('No se encontró una cámara disponible o está siendo usada por otra app.', 'error');
-    } else {
-      toast('No se pudo abrir la cámara: ' + msg, 'error');
+    return avisarErrorCamara(e);
+  }
+
+  const video=$('video');
+  video.srcObject=stream;
+  try{ await video.play(); }catch(e){}
+
+  ajustarCamara();
+  escaneando=true;
+  arrancarCronometro();
+  bucleNativo();
+}
+
+/**
+ * Enfoque continuo y linterna si el equipo lo permite.
+ * No se aplica zoom: el zoom de estos teléfonos es digital y lo único que hace
+ * es recortar y ampliar píxeles, o sea que ablanda la imagen justo cuando más
+ * nitidez se necesita. Es mejor acercar el teléfono.
+ */
+function ajustarCamara(){
+  const track=stream && stream.getVideoTracks()[0];
+  if(!track || !track.getCapabilities) return;
+  let caps={};
+  try{ caps=track.getCapabilities()||{}; }catch(e){ return; }
+
+  if(caps.focusMode && caps.focusMode.indexOf('continuous')>-1){
+    track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+  }
+  if(caps.torch) $('btnLinterna').classList.remove('oculto');
+}
+
+/* Toque sobre la imagen: vuelve a pedir enfoque, como el toque de la cámara nativa. */
+$('video').addEventListener('click',()=>{
+  const track=stream && stream.getVideoTracks()[0];
+  if(!track || !track.applyConstraints) return;
+  track.applyConstraints({advanced:[{focusMode:'single-shot'}]})
+    .then(()=>setTimeout(()=>track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{}),1200))
+    .catch(()=>{});
+});
+
+function bucleNativo(){
+  if(!escaneando) return;
+  requestAnimationFrame(async ()=>{
+    if(!escaneando) return;
+    const video=$('video');
+    if(video.readyState < 2) return bucleNativo();
+    try{
+      const codigos=await detector.detect(video);
+      if(codigos && codigos.length && codigos[0].rawValue){
+        return onCodigoLeido(codigos[0].rawValue);
+      }
+    }catch(e){/* cuadro sin código, se sigue */}
+    bucleNativo();
+  });
+}
+
+/* ---------- camino lento: html5-qrcode (navegadores sin lector nativo) ---------- */
+async function iniciarRespaldo(){
+  if(typeof Html5Qrcode==='undefined') return toast('No cargó la librería de escaneo. Recarga la página.','error');
+  mostrarBotonesEscaneo(true);
+  escanerRespaldo=new Html5Qrcode('reader',{formatsToSupport:formatosSoportados(),verbose:false});
+  try{
+    await escanerRespaldo.start(
+      {facingMode:'environment'},
+      {
+        fps:10,
+        /* Recuadro casi cuadrado: prioriza el QR, que es el que engancha rápido. */
+        qrbox:(a,b)=>{const w=Math.floor(Math.min(a,b)*0.85);return {width:w,height:w};},
+        videoConstraints:{facingMode:'environment',width:{ideal:2560},height:{ideal:1440}},
+        experimentalFeatures:{useBarCodeDetectorIfSupported:true}
+      },
+      (texto)=>onCodigoLeido(texto),
+      ()=>{}
+    );
+    escaneando=true;
+    arrancarCronometro();
+    try{
+      const caps=escanerRespaldo.getRunningTrackCapabilities();
+      if(caps && caps.torch) $('btnLinterna').classList.remove('oculto');
+    }catch(e){}
+  }catch(e){
+    detenerEscaneo();
+    avisarErrorCamara(e);
+  }
+}
+
+function avisarErrorCamara(e){
+  const msg=String(e && (e.message||e));
+  if(/NotAllowedError|Permission/i.test(msg)){
+    toast('El navegador bloqueó la cámara. Permítela en los ajustes del sitio y vuelve a intentar.','error');
+  }else if(/NotFoundError|NotReadableError|OverconstrainedError/i.test(msg)){
+    toast('No hay cámara disponible o está en uso por otra aplicación.','error');
+  }else{
+    toast('No se pudo abrir la cámara: '+msg,'error');
+  }
+}
+
+/* ---------- cronómetro / mensajes de ayuda mientras busca ---------- */
+function arrancarCronometro(){
+  inicioEscaneo=Date.now();
+  clearInterval(temporizador);
+  temporizador=setInterval(()=>{
+    const s=Math.round((Date.now()-inicioEscaneo)/1000);
+    const el=$('estadoEscaneo');
+    if(s<4) el.textContent='Buscando el código… ('+s+'s)';
+    else if(s<9) el.textContent='Acerca el teléfono al QR de la esquina superior derecha ('+s+'s)';
+    else if(s<15) el.textContent='Toca la imagen para enfocar y prueba la linterna ('+s+'s)';
+    else el.textContent='Si no engancha, cancela y usa "Tomar foto del código" ('+s+'s)';
+  },1000);
+}
+
+$('btnLinterna').addEventListener('click', async ()=>{
+  linterna=!linterna;
+  try{
+    if(stream){
+      await stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:linterna}]});
+    }else if(escanerRespaldo){
+      await escanerRespaldo.applyVideoConstraints({advanced:[{torch:linterna}]});
     }
-  }
+    $('btnLinterna').textContent = linterna ? '🔦 Apagar linterna' : '🔦 Linterna';
+  }catch(e){ linterna=false; toast('Este teléfono no permite la linterna desde el navegador.','error'); }
 });
 
-function soportaLinterna() {
-  try {
-    const caps = escaner && escaner.getRunningTrackCapabilities && escaner.getRunningTrackCapabilities();
-    return !!(caps && caps.torch);
-  } catch (e) { return false; }
-}
-
-$('btnLinterna').addEventListener('click', async () => {
-  if (!escaner) return;
-  try {
-    linternaEncendida = !linternaEncendida;
-    await escaner.applyVideoConstraints({ advanced: [{ torch: linternaEncendida }] });
-    $('btnLinterna').textContent = linternaEncendida ? '🔦 Apagar linterna' : '🔦 Linterna';
-  } catch (e) { toast('Este teléfono no permite encender la linterna desde el navegador.', 'error'); }
-});
-
-$('btnDetener').addEventListener('click', detenerEscaneo);
-
-function detenerEscaneo() {
-  $('btnEscanear').classList.remove('oculto');
-  $('btnDetener').classList.add('oculto');
+function detenerEscaneo(){
+  escaneando=false;
+  clearInterval(temporizador);
+  linterna=false;
+  $('btnLinterna').textContent='🔦 Linterna';
   $('btnLinterna').classList.add('oculto');
-  $('btnLinterna').textContent = '🔦 Linterna';
-  linternaEncendida = false;
-  if (escaner) {
-    const instancia = escaner;
-    escaner = null;
-    instancia.stop().then(() => instancia.clear()).catch(() => {});
+  $('visor').classList.add('oculto');
+  mostrarBotonesEscaneo(false);
+
+  if(stream){
+    stream.getTracks().forEach((t)=>{try{t.stop();}catch(e){}});
+    stream=null;
+    $('video').srcObject=null;
+  }
+  if(escanerRespaldo){
+    const inst=escanerRespaldo; escanerRespaldo=null;
+    inst.stop().then(()=>inst.clear()).catch(()=>{});
   }
 }
 
-async function onCodigoLeido(codigo) {
+/* ---------- foto fija: el camino más confiable en iPhone ---------- */
+$('btnFoto').addEventListener('click',()=>{
+  if(!idCaso()) return toast('Primero selecciona un caso.','error');
+  $('archivoFoto').click();
+});
+
+$('archivoFoto').addEventListener('change', async (e)=>{
+  const archivo=e.target.files && e.target.files[0];
+  e.target.value='';
+  if(!archivo) return;
+  toast('Leyendo la foto…');
+  try{
+    const codigo=await leerDeImagen(archivo);
+    if(!codigo) return toast('No se leyó el código en esa foto. Acércate más, que salga recto, enfocado y bien iluminado.','error');
+    onCodigoLeido(codigo);
+  }catch(err){
+    toast('No se pudo leer la foto: '+err.message,'error');
+  }
+});
+
+async function leerDeImagen(archivo){
+  if(detector){
+    try{
+      const bitmap=await createImageBitmap(archivo);
+      const r=await detector.detect(bitmap);
+      if(bitmap.close) bitmap.close();
+      if(r && r.length && r[0].rawValue) return r[0].rawValue;
+    }catch(e){/* sigue al respaldo */}
+  }
+  if(typeof Html5Qrcode==='undefined') return null;
+  const lector=new Html5Qrcode('lectorArchivo',{formatsToSupport:formatosSoportados(),verbose:false});
+  try{ return await lector.scanFile(archivo,false); }
+  catch(e){ return null; }
+  finally{ try{ lector.clear(); }catch(e){} }
+}
+
+/* ---------- pegado manual: solo como salida de emergencia ---------- */
+$('btnPegar').addEventListener('click',(e)=>{
+  e.preventDefault();
+  if(!idCaso()) return toast('Primero selecciona un caso.','error');
+  const codigo=(window.prompt('Pega aquí el código leído de la cédula:')||'').trim();
+  if(codigo) onCodigoLeido(codigo);
+});
+
+/* ---------- resultado del escaneo ---------- */
+async function onCodigoLeido(codigo){
   detenerEscaneo();
-  if (navigator.vibrate) navigator.vibrate(120);
-  try {
-    manejarResultado(await api('procesarEscaneo', { idCaso: idCaso(), codigo }), 'QR');
-  } catch (e) { toast(e.message, 'error'); }
+  if(navigator.vibrate) navigator.vibrate(120);
+  try{
+    manejarResultado(await api('procesarEscaneo',{idCaso:idCaso(),codigo}),'QR');
+  }catch(e){ toast(e.message,'error'); }
 }
 
-/* ---------- entrada / salida ---------- */
-function manejarResultado(resultado, modo) {
-  if (!resultado) return toast('Respuesta vacía del servidor.', 'error');
+function manejarResultado(resultado,modo){
+  if(!resultado) return toast('Respuesta vacía del servidor.','error');
 
-  if (resultado.movimiento === 'SALIDA') {
-    toast('Salida registrada: ' + resultado.registro.nombre + '. Certificado generado.', 'exito');
-    if (resultado.registro.certificadoUrl) window.open(resultado.registro.certificadoUrl, '_blank');
+  if(resultado.movimiento==='SALIDA'){
+    toast('Salida registrada: '+resultado.registro.nombre+'. Certificado generado.','exito');
+    if(resultado.registro.certificadoUrl) window.open(resultado.registro.certificadoUrl,'_blank');
     cargarAbiertos();
     return;
   }
-  if (resultado.movimiento === 'ENTRADA') {
-    toast('Entrada registrada: ' + resultado.registro.nombre + '.', 'exito');
+  if(resultado.movimiento==='ENTRADA'){
+    toast('Entrada registrada: '+resultado.registro.nombre+'.','exito');
     cargarAbiertos();
     return;
   }
 
-  pendienteEntrada = { persona: resultado.persona, esperado: resultado.esperado, modo: modo || 'QR' };
-  $('confNombre').textContent = resultado.persona.nombreCompleto;
-  $('confCedula').textContent = 'Cédula: ' + (resultado.persona.cedula || 'no informada');
-  $('confTipo').value = resultado.prefill.tipo || '';
-  $('confSolicitado').value = resultado.prefill.solicitadoPor || '';
-  $('confTratamiento').value = resultado.prefill.tratamiento || '';
-  $('avisoEsperado').innerHTML = resultado.esperado
+  pendienteEntrada={persona:resultado.persona,esperado:resultado.esperado,modo:modo||'QR'};
+  $('confNombre').textContent=resultado.persona.nombreCompleto;
+  $('confCedula').textContent='Cédula: '+(resultado.persona.cedula||'no informada');
+  $('confTipo').value=resultado.prefill.tipo||'';
+  $('confSolicitado').value=resultado.prefill.solicitadoPor||'';
+  $('confTratamiento').value=resultado.prefill.tratamiento||'';
+  $('avisoEsperado').innerHTML=resultado.esperado
     ? '<div class="exito-box">✓ Esta persona sí está en la lista de esperadas del caso.</div>'
     : '<div class="aviso">⚠ Esta persona NO está en la lista de personas esperadas de este caso. Verifica su identidad antes de continuar.</div>';
   $('panelConfirmacion').classList.remove('oculto');
-  $('panelConfirmacion').scrollIntoView({ behavior: 'smooth' });
+  $('panelConfirmacion').scrollIntoView({behavior:'smooth'});
 }
 
-$('btnConfirmar').addEventListener('click', async () => {
-  if (!pendienteEntrada) return;
-  try {
-    const registro = await api('confirmarEntrada', {
-      idCaso: idCaso(),
-      persona: pendienteEntrada.persona,
-      modo: pendienteEntrada.modo,
-      campos: {
-        tipo: $('confTipo').value.trim(),
-        solicitadoPor: $('confSolicitado').value.trim(),
-        tratamiento: $('confTratamiento').value.trim(),
-        esperado: pendienteEntrada.esperado
+$('btnConfirmar').addEventListener('click', async ()=>{
+  if(!pendienteEntrada) return;
+  try{
+    const reg=await api('confirmarEntrada',{
+      idCaso:idCaso(),
+      persona:pendienteEntrada.persona,
+      modo:pendienteEntrada.modo,
+      campos:{
+        tipo:$('confTipo').value.trim(),
+        solicitadoPor:$('confSolicitado').value.trim(),
+        tratamiento:$('confTratamiento').value.trim(),
+        esperado:pendienteEntrada.esperado
       }
     });
-    toast('Entrada registrada: ' + registro.nombre + '.', 'exito');
+    toast('Entrada registrada: '+reg.nombre+'.','exito');
     $('panelConfirmacion').classList.add('oculto');
-    pendienteEntrada = null;
+    pendienteEntrada=null;
     await cargarAbiertos();
-  } catch (e) { toast(e.message, 'error'); }
+  }catch(e){ toast(e.message,'error'); }
 });
 
-$('btnCancelarConf').addEventListener('click', () => {
+$('btnCancelarConf').addEventListener('click',()=>{
   $('panelConfirmacion').classList.add('oculto');
-  pendienteEntrada = null;
+  pendienteEntrada=null;
 });
 
 /* ---------- registro manual ---------- */
-$('btnManual').addEventListener('click', () => {
-  if (!idCaso()) return toast('Primero selecciona un caso.', 'error');
-  ['manNombre', 'manCedula', 'manTipo', 'manSolicitado', 'manTratamiento'].forEach((id) => ($(id).value = ''));
-  $('manSexo').value = '';
+$('btnManual').addEventListener('click',()=>{
+  if(!idCaso()) return toast('Primero selecciona un caso.','error');
+  ['manNombre','manCedula','manTipo','manSolicitado','manTratamiento'].forEach((id)=>($(id).value=''));
+  $('manSexo').value='';
   $('panelManual').classList.remove('oculto');
-  $('panelManual').scrollIntoView({ behavior: 'smooth' });
+  $('panelManual').scrollIntoView({behavior:'smooth'});
 });
 
-$('btnCancelarManual').addEventListener('click', () => $('panelManual').classList.add('oculto'));
+$('btnCancelarManual').addEventListener('click',()=>$('panelManual').classList.add('oculto'));
 
-$('btnGuardarManual').addEventListener('click', async () => {
-  const nombre = $('manNombre').value.trim();
-  if (!nombre) return toast('El nombre es obligatorio.', 'error');
-  try {
-    const resultado = await api('registrarManual', {
-      idCaso: idCaso(),
-      datos: {
+$('btnGuardarManual').addEventListener('click', async ()=>{
+  const nombre=$('manNombre').value.trim();
+  if(!nombre) return toast('El nombre es obligatorio.','error');
+  try{
+    const resultado=await api('registrarManual',{
+      idCaso:idCaso(),
+      datos:{
         nombre,
-        cedula: $('manCedula').value.trim(),
-        sexo: $('manSexo').value,
-        tipo: $('manTipo').value.trim(),
-        solicitadoPor: $('manSolicitado').value.trim(),
-        tratamiento: $('manTratamiento').value.trim()
+        cedula:$('manCedula').value.trim(),
+        sexo:$('manSexo').value,
+        tipo:$('manTipo').value.trim(),
+        solicitadoPor:$('manSolicitado').value.trim(),
+        tratamiento:$('manTratamiento').value.trim()
       }
     });
     $('panelManual').classList.add('oculto');
-    manejarResultado(resultado, 'MANUAL');
-  } catch (e) { toast(e.message, 'error'); }
+    manejarResultado(resultado,'MANUAL');
+  }catch(e){ toast(e.message,'error'); }
 });
 
 /* ---------- inicio ---------- */
-(async function () {
-  const guardado = localStorage.getItem('pinEscaner');
-  operador = localStorage.getItem('operadorEscaner') || '';
-  $('operador').value = operador;
-  if (!guardado) return mostrarPantallaPin();
-  pin = guardado;
-  try {
-    await api('ping');
-    await iniciarApp();
-  } catch (e) {
-    mostrarPantallaPin();
-    toast(e.message, 'error');
-  }
+(async function(){
+  const guardado=localStorage.getItem('pinEscaner');
+  operador=localStorage.getItem('operadorEscaner')||'';
+  $('operador').value=operador;
+  if(!guardado) return mostrarPantallaPin();
+  pin=guardado;
+  try{ await api('ping'); await iniciarApp(); }
+  catch(e){ mostrarPantallaPin(); toast(e.message,'error'); }
 })();
 </script>
 </body>
