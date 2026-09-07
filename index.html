@@ -180,6 +180,7 @@
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
 /* ==========================================================================
    Página de escaneo — Control de Asistencia a Audiencias
@@ -201,7 +202,33 @@ const URL_API = 'https://script.google.com/macros/s/AKfycbxz4xj87tQo1fq1LBj6lhmN
 
 /* Se muestra en pantalla para saber de un vistazo si el teléfono cargó la
    versión nueva o se quedó con una copia vieja en caché. Súbelo siempre. */
-const VERSION = 'v4';
+const VERSION = 'v5';
+
+/**
+ * Registro de lo que va pasando al decodificar. Se muestra en pantalla porque
+ * los errores de detección son silenciosos por naturaleza: sin esto, "no lo
+ * reconoce" puede ser cualquiera de cinco causas distintas.
+ */
+const diag = { bd:'sin comprobar', formatos:'-', errBD:'', errJS:'', cuadros:0, ultimoIntento:'' };
+
+function pintarDiagnostico(){
+  const partes=[VERSION];
+  const track=stream && stream.getVideoTracks()[0];
+  if(track){
+    let cfg={},caps={};
+    try{ cfg=track.getSettings?track.getSettings():{}; }catch(e){}
+    try{ caps=track.getCapabilities?track.getCapabilities():{}; }catch(e){}
+    partes.push((track.label||'cámara')+' '+(cfg.width||'?')+'×'+(cfg.height||'?'));
+    partes.push('enfoque: '+((caps.focusMode&&caps.focusMode.length)?caps.focusMode.join('/'):'sin control'));
+  }
+  partes.push('lector nativo: '+diag.bd+(diag.formatos!=='-'?' ['+diag.formatos+']':''));
+  partes.push('jsQR: '+(typeof jsQR!=='undefined'?'cargado':'NO CARGÓ'));
+  if(diag.cuadros) partes.push('cuadros analizados: '+diag.cuadros);
+  if(diag.ultimoIntento) partes.push(diag.ultimoIntento);
+  if(diag.errBD) partes.push('error nativo: '+diag.errBD);
+  if(diag.errJS) partes.push('error jsQR: '+diag.errJS);
+  $('diagCamara').textContent=partes.join(' · ');
+}
 
 const $ = (id) => document.getElementById(id);
 let pin = '', operador = '', casos = [];
@@ -364,17 +391,22 @@ async function prepararDetector(){
   if('BarcodeDetector' in window){
     try{
       const soportados=await BarcodeDetector.getSupportedFormats();
+      diag.formatos=(soportados||[]).join(',')||'ninguno';
       const queremos=['qr_code','pdf417'].filter((f)=>soportados.indexOf(f)>-1);
       if(queremos.length){
         detector=new BarcodeDetector({formats:queremos});
-        nota.textContent=VERSION+' · Lectura rápida activa (lector nativo del teléfono): '+queremos.join(' + ')+'.';
+        diag.bd='sí ('+queremos.join('+')+')';
+        nota.textContent=VERSION+' · Dos decodificadores activos: lector nativo ('+queremos.join(' + ')+') y jsQR para el QR.';
         return;
       }
-    }catch(e){/* sigue al respaldo */}
+      diag.bd='presente pero sin formatos útiles';
+    }catch(e){ diag.bd='falló al iniciar'; diag.errBD=String(e && (e.message||e)).slice(0,80); }
+  }else{
+    diag.bd='no existe en este navegador';
   }
   detector=null;
-  nota.innerHTML=VERSION+' · Este navegador no trae lector nativo de códigos, así que la lectura en vivo es más lenta. '+
-                 'Si tarda, usa <strong>Tomar foto del código</strong>: suele leerlo al primer intento.';
+  nota.innerHTML=VERSION+' · Sin lector nativo: se decodifica el QR con <strong>jsQR</strong>. '+
+                 'Si el vivo no engancha, usa <strong>Tomar foto del código</strong>.';
 }
 
 function formatosSoportados(){
@@ -451,24 +483,12 @@ async function iniciarNativo(){
 
   await poblarCamaras();
   ajustarCamara();
-  mostrarDiagnostico();
+  pintarDiagnostico();
   escaneando=true;
   arrancarCronometro();
   bucleNativo();
 }
 
-/** Qué lente quedó activo y qué permite: sirve para saber si vale probar otro. */
-function mostrarDiagnostico(){
-  const track=stream && stream.getVideoTracks()[0];
-  if(!track) return;
-  let caps={}, cfg={};
-  try{ caps=track.getCapabilities?track.getCapabilities():{}; }catch(e){}
-  try{ cfg=track.getSettings?track.getSettings():{}; }catch(e){}
-  const enfoque=(caps.focusMode&&caps.focusMode.length)?caps.focusMode.join('/'):'sin control';
-  $('diagCamara').textContent=VERSION+' · '+(track.label||'cámara')+' · '+
-    (cfg.width||'?')+'×'+(cfg.height||'?')+' · enfoque: '+enfoque+
-    (caps.torch?' · linterna sí':' · linterna no');
-}
 
 /**
  * Enfoque continuo y linterna si el equipo lo permite.
@@ -497,18 +517,54 @@ $('video').addEventListener('click',()=>{
     .catch(()=>{});
 });
 
+/* ---- lienzo para jsQR: decodifica el QR sin depender del lector nativo ---- */
+let lienzo=null, ctx2d=null;
+function cuadroAImageData(video, maxAncho){
+  if(!lienzo){ lienzo=document.createElement('canvas'); ctx2d=lienzo.getContext('2d',{willReadFrequently:true}); }
+  const vw=video.videoWidth, vh=video.videoHeight;
+  if(!vw || !vh) return null;
+  const escala=Math.min(1, maxAncho/vw);
+  lienzo.width=Math.round(vw*escala);
+  lienzo.height=Math.round(vh*escala);
+  ctx2d.drawImage(video,0,0,lienzo.width,lienzo.height);
+  return ctx2d.getImageData(0,0,lienzo.width,lienzo.height);
+}
+
+function decodificarJsQR(imagen){
+  if(typeof jsQR==='undefined' || !imagen) return null;
+  try{
+    const r=jsQR(imagen.data, imagen.width, imagen.height, {inversionAttempts:'attemptBoth'});
+    return (r && r.data) ? r.data : null;
+  }catch(e){ diag.errJS=String(e && (e.message||e)).slice(0,80); return null; }
+}
+
+/**
+ * Cada vuelta prueba el lector nativo, y una de cada tres pasa el cuadro por
+ * jsQR. Son dos motores independientes: si uno falla en este teléfono, el otro
+ * sigue trabajando.
+ */
 function bucleNativo(){
   if(!escaneando) return;
   requestAnimationFrame(async ()=>{
     if(!escaneando) return;
     const video=$('video');
     if(video.readyState < 2) return bucleNativo();
-    try{
-      const codigos=await detector.detect(video);
-      if(codigos && codigos.length && codigos[0].rawValue){
-        return onCodigoLeido(codigos[0].rawValue);
-      }
-    }catch(e){/* cuadro sin código, se sigue */}
+
+    diag.cuadros++;
+
+    if(detector){
+      try{
+        const codigos=await detector.detect(video);
+        if(codigos && codigos.length && codigos[0].rawValue) return onCodigoLeido(codigos[0].rawValue);
+      }catch(e){ diag.errBD=String(e && (e.message||e)).slice(0,80); }
+    }
+
+    if(diag.cuadros % 3 === 0){
+      const texto=decodificarJsQR(cuadroAImageData(video, 1280));
+      if(texto) return onCodigoLeido(texto);
+    }
+
+    if(diag.cuadros % 15 === 0) pintarDiagnostico();
     bucleNativo();
   });
 }
@@ -621,20 +677,53 @@ $('archivoFoto').addEventListener('change', async (e)=>{
   }
 });
 
+/**
+ * La foto se intenta con los tres motores, y a dos escalas distintas en jsQR:
+ * un QR muy grande dentro de una foto de 12 megapíxeles a veces falla, y
+ * reducirla lo destraba.
+ */
 async function leerDeImagen(archivo){
-  if(detector){
+  const pasos=[];
+  let bitmap=null;
+  try{ bitmap=await createImageBitmap(archivo); }
+  catch(e){ pasos.push('no se pudo abrir la imagen'); }
+
+  if(bitmap) pasos.push('foto '+bitmap.width+'×'+bitmap.height);
+
+  if(detector && bitmap){
     try{
-      const bitmap=await createImageBitmap(archivo);
       const r=await detector.detect(bitmap);
-      if(bitmap.close) bitmap.close();
-      if(r && r.length && r[0].rawValue) return r[0].rawValue;
-    }catch(e){/* sigue al respaldo */}
+      if(r && r.length && r[0].rawValue){ diag.ultimoIntento='foto leída por el lector nativo'; return r[0].rawValue; }
+      pasos.push('nativo: nada');
+    }catch(e){ pasos.push('nativo falló'); diag.errBD=String(e && (e.message||e)).slice(0,80); }
   }
-  if(typeof Html5Qrcode==='undefined') return null;
-  const lector=new Html5Qrcode('lectorArchivo',{formatsToSupport:formatosSoportados(),verbose:false});
-  try{ return await lector.scanFile(archivo,false); }
-  catch(e){ return null; }
-  finally{ try{ lector.clear(); }catch(e){} }
+
+  if(bitmap && typeof jsQR!=='undefined'){
+    if(!lienzo){ lienzo=document.createElement('canvas'); ctx2d=lienzo.getContext('2d',{willReadFrequently:true}); }
+    for(const ancho of [1600, 1000, 2400]){
+      const escala=Math.min(1, ancho/bitmap.width);
+      lienzo.width=Math.round(bitmap.width*escala);
+      lienzo.height=Math.round(bitmap.height*escala);
+      ctx2d.drawImage(bitmap,0,0,lienzo.width,lienzo.height);
+      const texto=decodificarJsQR(ctx2d.getImageData(0,0,lienzo.width,lienzo.height));
+      if(texto){ diag.ultimoIntento='foto leída por jsQR a '+lienzo.width+'px'; return texto; }
+    }
+    pasos.push('jsQR: nada en 3 escalas');
+  }
+  if(bitmap && bitmap.close) bitmap.close();
+
+  if(typeof Html5Qrcode!=='undefined'){
+    const lector=new Html5Qrcode('lectorArchivo',{formatsToSupport:formatosSoportados(),verbose:false});
+    try{
+      const t=await lector.scanFile(archivo,false);
+      if(t){ diag.ultimoIntento='foto leída por html5-qrcode'; return t; }
+    }catch(e){ pasos.push('html5-qrcode: nada'); }
+    finally{ try{ lector.clear(); }catch(e){} }
+  }
+
+  diag.ultimoIntento='foto sin lectura → '+pasos.join(' / ');
+  pintarDiagnostico();
+  return null;
 }
 
 /* ---------- pegado manual: solo como salida de emergencia ---------- */
