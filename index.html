@@ -38,10 +38,12 @@
   #visor{position:relative;margin-top:.9rem;border-radius:10px;overflow:hidden;background:#000}
   #video{width:100%;display:block}
   #guia{position:absolute;inset:0;pointer-events:none}
-  /* Proporción de cédula: se encuadra la tarjeta completa y se leen sus dos códigos. */
-  #guia .marco{position:absolute;left:5%;right:5%;top:50%;transform:translateY(-50%);
-               aspect-ratio:1.58/1;border:3px solid rgba(255,255,255,.9);border-radius:10px;
-               box-shadow:0 0 0 100vmax rgba(0,0,0,.3)}
+  /* Cuadro pequeño y cuadrado: se apunta SOLO al QR. Los decodificadores
+     fallan cuando el código ocupa una fracción chica del cuadro, así que el
+     encuadre tiene que ser sobre el código, no sobre la tarjeta entera. */
+  #guia .marco{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+               height:62%;aspect-ratio:1/1;border:3px solid rgba(255,255,255,.95);
+               border-radius:10px;box-shadow:0 0 0 100vmax rgba(0,0,0,.35)}
   #estadoEscaneo{position:absolute;left:0;right:0;bottom:0;background:rgba(15,23,42,.75);
                  color:#fff;font-size:.82rem;padding:.5rem .7rem;text-align:center}
   #lectorArchivo{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
@@ -113,9 +115,9 @@
       <input type="file" id="archivoFoto" accept="image/*" capture="environment" class="oculto">
 
       <p class="meta" id="ayudaEscaneo" style="margin-top:.7rem">
-        Encuadra el <strong>reverso de la cédula</strong> dentro del rectángulo. Se leen los dos códigos,
-        pero el que engancha más rápido es el <strong>QR de la esquina superior derecha</strong>: si tarda,
-        acerca el teléfono a ese QR. Toca la imagen para reenfocar y usa la linterna si hay poca luz.
+        Apunta el cuadro blanco <strong>solo al QR</strong> de la esquina superior derecha del reverso,
+        y acerca hasta que el QR llene ese cuadro. No encuadres la cédula completa: si el QR queda chiquito
+        dentro de la imagen, no se lee. Toca la pantalla para reenfocar y usa la linterna si hay poca luz.
       </p>
       <p class="meta" id="motorEscaneo" style="margin-top:.4rem"></p>
     </div>
@@ -202,7 +204,7 @@ const URL_API = 'https://script.google.com/macros/s/AKfycbxz4xj87tQo1fq1LBj6lhmN
 
 /* Se muestra en pantalla para saber de un vistazo si el teléfono cargó la
    versión nueva o se quedó con una copia vieja en caché. Súbelo siempre. */
-const VERSION = 'v5';
+const VERSION = 'v6';
 
 /**
  * Registro de lo que va pasando al decodificar. Se muestra en pantalla porque
@@ -517,17 +519,56 @@ $('video').addEventListener('click',()=>{
     .catch(()=>{});
 });
 
-/* ---- lienzo para jsQR: decodifica el QR sin depender del lector nativo ---- */
+/* ==========================================================================
+   Decodificación por recortes.
+
+   Un decodificador de QR falla cuando el código ocupa una fracción pequeña
+   del cuadro: comprobado con una foto real de la cédula, la imagen completa
+   no decodifica y un recorte de 200x200 px sobre el QR decodifica de una.
+   Por eso NUNCA se le pasa el cuadro entero reducido: se le pasan recortes a
+   resolución nativa — el central, que es el del rectángulo en pantalla, y
+   además una malla que va rotando por si la persona encuadró de otra forma.
+   ========================================================================== */
 let lienzo=null, ctx2d=null;
-function cuadroAImageData(video, maxAncho){
+const FRACCION_CENTRO=0.62;   // debe coincidir con la altura del marco en el CSS
+
+function prepararLienzo(){
   if(!lienzo){ lienzo=document.createElement('canvas'); ctx2d=lienzo.getContext('2d',{willReadFrequently:true}); }
-  const vw=video.videoWidth, vh=video.videoHeight;
-  if(!vw || !vh) return null;
-  const escala=Math.min(1, maxAncho/vw);
-  lienzo.width=Math.round(vw*escala);
-  lienzo.height=Math.round(vh*escala);
-  ctx2d.drawImage(video,0,0,lienzo.width,lienzo.height);
-  return ctx2d.getImageData(0,0,lienzo.width,lienzo.height);
+}
+
+/** Recorte a resolución nativa, sin reducir: la nitidez es lo que decide. */
+function recorte(fuente, sx, sy, lado){
+  prepararLienzo();
+  lienzo.width=lado; lienzo.height=lado;
+  ctx2d.drawImage(fuente, sx, sy, lado, lado, 0, 0, lado, lado);
+  return ctx2d.getImageData(0,0,lado,lado);
+}
+
+function recorteCentral(fuente, ancho, alto, fraccion){
+  const lado=Math.round(Math.min(ancho,alto)*fraccion);
+  return recorte(fuente, Math.round((ancho-lado)/2), Math.round((alto-lado)/2), lado);
+}
+
+/**
+ * Casillas cuadradas con 50% de solape que cubren TODO el cuadro.
+ * El solape importa: probado contra la foto real de la cédula, una malla sin
+ * solape dejaba el QR partido entre dos casillas y no lo encontraba nunca.
+ * El tamaño de casilla también decide — el QR tiene que ocupar buena parte de
+ * ella — por eso el barrido se hace con varios tamaños.
+ */
+function casillasMalla(ancho, alto, divisiones){
+  const lado=Math.max(120, Math.round(Math.min(ancho,alto)/divisiones));
+  if(lado>ancho || lado>alto) return [];
+  const paso=Math.max(1, Math.round(lado/2));
+  const cols=Math.max(1, Math.ceil((ancho-lado)/paso)+1);
+  const filas=Math.max(1, Math.ceil((alto-lado)/paso)+1);
+  const casillas=[];
+  for(let f=0; f<filas; f++){
+    for(let c=0; c<cols; c++){
+      casillas.push({sx:Math.min(c*paso, ancho-lado), sy:Math.min(f*paso, alto-lado), lado});
+    }
+  }
+  return casillas;
 }
 
 function decodificarJsQR(imagen){
@@ -539,16 +580,19 @@ function decodificarJsQR(imagen){
 }
 
 /**
- * Cada vuelta prueba el lector nativo, y una de cada tres pasa el cuadro por
- * jsQR. Son dos motores independientes: si uno falla en este teléfono, el otro
- * sigue trabajando.
+ * Cada vuelta: el lector nativo sobre el cuadro completo (ML Kit hace su propia
+ * búsqueda por escalas y no necesita ayuda), y jsQR sobre el recorte central —
+ * lo que está dentro del rectángulo blanco. Además, una casilla distinta de la
+ * malla en cada vuelta, para cubrir el cuadro completo sin frenar el ritmo.
  */
+let indiceCasilla=0;
 function bucleNativo(){
   if(!escaneando) return;
   requestAnimationFrame(async ()=>{
     if(!escaneando) return;
     const video=$('video');
-    if(video.readyState < 2) return bucleNativo();
+    const vw=video.videoWidth, vh=video.videoHeight;
+    if(video.readyState < 2 || !vw || !vh) return bucleNativo();
 
     diag.cuadros++;
 
@@ -559,9 +603,15 @@ function bucleNativo(){
       }catch(e){ diag.errBD=String(e && (e.message||e)).slice(0,80); }
     }
 
-    if(diag.cuadros % 3 === 0){
-      const texto=decodificarJsQR(cuadroAImageData(video, 1280));
-      if(texto) return onCodigoLeido(texto);
+    if(typeof jsQR!=='undefined'){
+      const centro=decodificarJsQR(recorteCentral(video, vw, vh, FRACCION_CENTRO));
+      if(centro) return onCodigoLeido(centro);
+
+      const casillas=casillasMalla(vw, vh, 3);
+      const c=casillas[indiceCasilla % casillas.length];
+      indiceCasilla++;
+      const enMalla=decodificarJsQR(recorte(video, c.sx, c.sy, c.lado));
+      if(enMalla) return onCodigoLeido(enMalla);
     }
 
     if(diag.cuadros % 15 === 0) pintarDiagnostico();
@@ -698,17 +748,21 @@ async function leerDeImagen(archivo){
     }catch(e){ pasos.push('nativo falló'); diag.errBD=String(e && (e.message||e)).slice(0,80); }
   }
 
+  /* En la foto se barre en serio: centro, y mallas de 3x3 y 5x5 a resolución
+     nativa. Es lo que destrabó la prueba con tu cédula. */
   if(bitmap && typeof jsQR!=='undefined'){
-    if(!lienzo){ lienzo=document.createElement('canvas'); ctx2d=lienzo.getContext('2d',{willReadFrequently:true}); }
-    for(const ancho of [1600, 1000, 2400]){
-      const escala=Math.min(1, ancho/bitmap.width);
-      lienzo.width=Math.round(bitmap.width*escala);
-      lienzo.height=Math.round(bitmap.height*escala);
-      ctx2d.drawImage(bitmap,0,0,lienzo.width,lienzo.height);
-      const texto=decodificarJsQR(ctx2d.getImageData(0,0,lienzo.width,lienzo.height));
-      if(texto){ diag.ultimoIntento='foto leída por jsQR a '+lienzo.width+'px'; return texto; }
+    const bw=bitmap.width, bh=bitmap.height;
+
+    const centro=decodificarJsQR(recorteCentral(bitmap, bw, bh, FRACCION_CENTRO));
+    if(centro){ diag.ultimoIntento='foto leída por jsQR (recorte central)'; return centro; }
+
+    for(const divisiones of [3,4,2,6]){
+      for(const c of casillasMalla(bw, bh, divisiones)){
+        const texto=decodificarJsQR(recorte(bitmap, c.sx, c.sy, c.lado));
+        if(texto){ diag.ultimoIntento='foto leída por jsQR (casillas de '+c.lado+'px)'; return texto; }
+      }
     }
-    pasos.push('jsQR: nada en 3 escalas');
+    pasos.push('jsQR: nada en el centro ni en el barrido con 4 tamaños de casilla');
   }
   if(bitmap && bitmap.close) bitmap.close();
 
