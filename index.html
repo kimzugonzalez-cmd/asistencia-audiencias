@@ -125,11 +125,6 @@
         </div>
       </div>
 
-      <div id="selectorCamara" class="oculto">
-        <label for="selCamara">Lente de la cámara (si no enfoca de cerca, prueba otro)</label>
-        <select id="selCamara"></select>
-      </div>
-
       <div id="visor" class="oculto">
         <video id="video" playsinline muted autoplay></video>
         <div id="guia"><div class="marco"></div></div>
@@ -230,7 +225,7 @@ const URL_API = 'https://script.google.com/macros/s/AKfycbxz4xj87tQo1fq1LBj6lhmN
 
 /* Se muestra en pantalla para saber de un vistazo si el teléfono cargó la
    versión nueva o se quedó con una copia vieja en caché. Súbelo siempre. */
-const VERSION = 'v8';
+const VERSION = 'v9';
 
 /**
  * Registro de lo que va pasando al decodificar. Se muestra en pantalla porque
@@ -467,24 +462,22 @@ $('btnDetener').addEventListener('click',detenerEscaneo);
  * enfocar a 10 cm, que es justo la distancia a la que se lee una cédula. Por
  * eso se listan todos y se puede cambiar de lente en caliente.
  */
-async function poblarCamaras(){
+/**
+ * Se usa siempre la cámara trasera principal. No hay selector: cambiar de
+ * lente en caliente reiniciaba el stream y bloqueaba el teléfono. La primera
+ * vez se toma la que da el sistema por defecto (la principal en estos
+ * equipos) y se recuerda su identificador para las siguientes veces, sin
+ * reinicios ni preguntas.
+ */
+function recordarCamaraUsada(){
   try{
-    const dispositivos=await navigator.mediaDevices.enumerateDevices();
-    camaras=dispositivos.filter((d)=>d.kind==='videoinput');
-  }catch(e){ camaras=[]; }
-  if(camaras.length<2){ $('selectorCamara').classList.add('oculto'); return; }
-
-  $('selCamara').innerHTML=camaras.map((c,i)=>
-    `<option value="${escapeHtml(c.deviceId)}">${escapeHtml(c.label||('Cámara '+(i+1)))}</option>`).join('');
-  if(camaraElegida) $('selCamara').value=camaraElegida;
-  $('selectorCamara').classList.remove('oculto');
+    const cfg=stream.getVideoTracks()[0].getSettings();
+    if(cfg && cfg.deviceId){
+      camaraElegida=cfg.deviceId;
+      localStorage.setItem('camaraEscaner', camaraElegida);
+    }
+  }catch(e){}
 }
-
-$('selCamara').addEventListener('change', async ()=>{
-  camaraElegida=$('selCamara').value;
-  localStorage.setItem('camaraEscaner',camaraElegida);
-  if(escaneando){ detenerEscaneo(); setTimeout(iniciarNativo,250); }
-});
 
 function restriccionesVideo(){
   const v={ width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} };
@@ -513,7 +506,7 @@ async function iniciarNativo(){
   video.srcObject=stream;
   try{ await video.play(); }catch(e){}
 
-  await poblarCamaras();
+  recordarCamaraUsada();
   ajustarCamara();
   pintarDiagnostico();
   escaneando=true;
@@ -591,6 +584,7 @@ $('video').addEventListener('click',()=>{
    además una malla que va rotando por si la persona encuadró de otra forma.
    ========================================================================== */
 let lienzo=null, ctx2d=null;
+let trabajo=null, ctxTrabajo=null;
 const FRACCION_CENTRO=0.62;   // debe coincidir con la altura del marco en el CSS
 
 function prepararLienzo(){
@@ -629,6 +623,11 @@ function casillasMalla(ancho, alto, divisiones){
       casillas.push({sx:Math.min(c*paso, ancho-lado), sy:Math.min(f*paso, alto-lado), lado});
     }
   }
+
+  /* Probé ordenarlas desde el centro hacia afuera pensando que el código
+     estaría cerca del medio: medido contra una foto real tardó MÁS (28
+     casillas contra 20), porque al fotografiar la cédula entera el QR queda
+     en una esquina. Se dejan en orden de barrido. */
   return casillas;
 }
 
@@ -639,17 +638,38 @@ function casillasMalla(ancho, alto, divisiones){
  */
 async function barrerBitmap(bitmap){
   if(!bitmap || typeof jsQR==='undefined') return null;
-  const bw=bitmap.width, bh=bitmap.height;
+  const t0=Date.now();
 
-  const centro=decodificarJsQR(recorteCentral(bitmap, bw, bh, FRACCION_CENTRO));
-  if(centro){ diag.ultimoIntento='leído en el centro'; return centro; }
+  /* Una foto de 12 megapíxeles tiene muchos más píxeles de los necesarios, y
+     recorrerla entera a resolución nativa tarda segundos. Se reduce a un
+     lienzo de trabajo y todo el barrido corre sobre él.
+     El tope de 2400 px no es arbitrario: probado contra una imagen real,
+     bajando a 2000 el QR quedaba tan pequeño que dejaba de decodificar. */
+  const maxLado=2400;
+  const escala=Math.min(1, maxLado/Math.max(bitmap.width, bitmap.height));
+  const w=Math.round(bitmap.width*escala), h=Math.round(bitmap.height*escala);
 
-  for(const divisiones of [3,4,2,6]){
-    for(const c of casillasMalla(bw, bh, divisiones)){
-      const texto=decodificarJsQR(recorte(bitmap, c.sx, c.sy, c.lado));
-      if(texto){ diag.ultimoIntento='leído en casilla de '+c.lado+'px'; return texto; }
+  if(!trabajo){ trabajo=document.createElement('canvas'); ctxTrabajo=trabajo.getContext('2d',{willReadFrequently:true}); }
+  trabajo.width=w; trabajo.height=h;
+  ctxTrabajo.drawImage(bitmap,0,0,w,h);
+
+  // 1) la imagen completa, que a esta escala ya es barata
+  const completa=decodificarJsQR(ctxTrabajo.getImageData(0,0,w,h));
+  if(completa){ diag.ultimoIntento='leído completo en '+(Date.now()-t0)+'ms'; return completa; }
+
+  // 2) el centro, que es donde apunta el cuadro guía
+  const centro=decodificarJsQR(recorteCentral(trabajo, w, h, FRACCION_CENTRO));
+  if(centro){ diag.ultimoIntento='leído en el centro en '+(Date.now()-t0)+'ms'; return centro; }
+
+  // 3) barrido por casillas, de las más probables a las menos
+  for(const divisiones of [3,4]){
+    for(const c of casillasMalla(w, h, divisiones)){
+      const texto=decodificarJsQR(recorte(trabajo, c.sx, c.sy, c.lado));
+      if(texto){ diag.ultimoIntento='leído en casilla de '+c.lado+'px en '+(Date.now()-t0)+'ms'; return texto; }
     }
+    if(Date.now()-t0 > 3000) break;   // techo de tiempo: no dejar al operador esperando
   }
+  diag.ultimoIntento='sin lectura tras '+(Date.now()-t0)+'ms';
   return null;
 }
 
@@ -799,7 +819,6 @@ function detenerEscaneo(){
   $('btnLinterna').textContent='🔦 Linterna';
   $('btnLinterna').classList.add('oculto');
   $('visor').classList.add('oculto');
-  $('selectorCamara').classList.add('oculto');
   mostrarBotonesEscaneo(false);
 
   if(stream){
