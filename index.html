@@ -97,11 +97,17 @@
         <button id="btnManual" class="secundario">✍️ Registro manual (sin cédula)</button>
       </div>
 
+      <div id="selectorCamara" class="oculto">
+        <label for="selCamara">Lente de la cámara (si no enfoca de cerca, prueba otro)</label>
+        <select id="selCamara"></select>
+      </div>
+
       <div id="visor" class="oculto">
         <video id="video" playsinline muted autoplay></video>
         <div id="guia"><div class="marco"></div></div>
         <div id="estadoEscaneo">Buscando el código…</div>
       </div>
+      <p class="meta" id="diagCamara" style="margin-top:.5rem"></p>
       <div id="reader"></div>
       <div id="lectorArchivo"></div>
       <input type="file" id="archivoFoto" accept="image/*" capture="environment" class="oculto">
@@ -193,6 +199,10 @@
 
 const URL_API = 'https://script.google.com/macros/s/AKfycbxz4xj87tQo1fq1LBj6lhmNHy7KJOtc4QLNkFcxzvFs6lfthUOzumE8j9fhe6J_1nJX/exec';
 
+/* Se muestra en pantalla para saber de un vistazo si el teléfono cargó la
+   versión nueva o se quedó con una copia vieja en caché. Súbelo siempre. */
+const VERSION = 'v4';
+
 const $ = (id) => document.getElementById(id);
 let pin = '', operador = '', casos = [];
 let pendienteEntrada = null;
@@ -200,6 +210,8 @@ let pendienteEntrada = null;
 /* estado del escaneo */
 let detector = null;          // BarcodeDetector nativo, si existe
 let stream = null;            // MediaStream del camino nativo
+let camaras = [];             // lentes disponibles del teléfono
+let camaraElegida = localStorage.getItem('camaraEscaner') || '';
 let escaneando = false;
 let escanerRespaldo = null;   // instancia html5-qrcode (camino lento)
 let linterna = false;
@@ -355,13 +367,13 @@ async function prepararDetector(){
       const queremos=['qr_code','pdf417'].filter((f)=>soportados.indexOf(f)>-1);
       if(queremos.length){
         detector=new BarcodeDetector({formats:queremos});
-        nota.textContent='Lectura rápida activa (lector nativo del teléfono): '+queremos.join(' + ')+'.';
+        nota.textContent=VERSION+' · Lectura rápida activa (lector nativo del teléfono): '+queremos.join(' + ')+'.';
         return;
       }
     }catch(e){/* sigue al respaldo */}
   }
   detector=null;
-  nota.innerHTML='Este navegador no trae lector nativo de códigos, así que la lectura en vivo es más lenta. '+
+  nota.innerHTML=VERSION+' · Este navegador no trae lector nativo de códigos, así que la lectura en vivo es más lenta. '+
                  'Si tarda, usa <strong>Tomar foto del código</strong>: suele leerlo al primer intento.';
 }
 
@@ -385,30 +397,77 @@ $('btnEscanear').addEventListener('click',()=>{
 $('btnDetener').addEventListener('click',detenerEscaneo);
 
 /* ---------- camino rápido: BarcodeDetector sobre el video completo ---------- */
+/**
+ * Muchos teléfonos tienen varios lentes traseros y el navegador no siempre
+ * entrega el principal: el gran angular suele ser de FOCO FIJO y no puede
+ * enfocar a 10 cm, que es justo la distancia a la que se lee una cédula. Por
+ * eso se listan todos y se puede cambiar de lente en caliente.
+ */
+async function poblarCamaras(){
+  try{
+    const dispositivos=await navigator.mediaDevices.enumerateDevices();
+    camaras=dispositivos.filter((d)=>d.kind==='videoinput');
+  }catch(e){ camaras=[]; }
+  if(camaras.length<2){ $('selectorCamara').classList.add('oculto'); return; }
+
+  $('selCamara').innerHTML=camaras.map((c,i)=>
+    `<option value="${escapeHtml(c.deviceId)}">${escapeHtml(c.label||('Cámara '+(i+1)))}</option>`).join('');
+  if(camaraElegida) $('selCamara').value=camaraElegida;
+  $('selectorCamara').classList.remove('oculto');
+}
+
+$('selCamara').addEventListener('change', async ()=>{
+  camaraElegida=$('selCamara').value;
+  localStorage.setItem('camaraEscaner',camaraElegida);
+  if(escaneando){ detenerEscaneo(); setTimeout(iniciarNativo,250); }
+});
+
+function restriccionesVideo(){
+  const v={ width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} };
+  if(camaraElegida) v.deviceId={exact:camaraElegida};
+  else v.facingMode={ideal:'environment'};
+  return v;
+}
+
 async function iniciarNativo(){
   mostrarBotonesEscaneo(true);
   $('visor').classList.remove('oculto');
   try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video:{
-        facingMode:{ideal:'environment'},
-        width:{ideal:2560}, height:{ideal:1440}, frameRate:{ideal:30}
-      },
-      audio:false
-    });
+    stream = await navigator.mediaDevices.getUserMedia({video:restriccionesVideo(),audio:false});
   }catch(e){
-    detenerEscaneo();
-    return avisarErrorCamara(e);
+    if(camaraElegida){            // el lente guardado ya no existe: se reintenta con el de por defecto
+      camaraElegida=''; localStorage.removeItem('camaraEscaner');
+      try{ stream=await navigator.mediaDevices.getUserMedia({video:restriccionesVideo(),audio:false}); }
+      catch(e2){ detenerEscaneo(); return avisarErrorCamara(e2); }
+    }else{
+      detenerEscaneo();
+      return avisarErrorCamara(e);
+    }
   }
 
   const video=$('video');
   video.srcObject=stream;
   try{ await video.play(); }catch(e){}
 
+  await poblarCamaras();
   ajustarCamara();
+  mostrarDiagnostico();
   escaneando=true;
   arrancarCronometro();
   bucleNativo();
+}
+
+/** Qué lente quedó activo y qué permite: sirve para saber si vale probar otro. */
+function mostrarDiagnostico(){
+  const track=stream && stream.getVideoTracks()[0];
+  if(!track) return;
+  let caps={}, cfg={};
+  try{ caps=track.getCapabilities?track.getCapabilities():{}; }catch(e){}
+  try{ cfg=track.getSettings?track.getSettings():{}; }catch(e){}
+  const enfoque=(caps.focusMode&&caps.focusMode.length)?caps.focusMode.join('/'):'sin control';
+  $('diagCamara').textContent=VERSION+' · '+(track.label||'cámara')+' · '+
+    (cfg.width||'?')+'×'+(cfg.height||'?')+' · enfoque: '+enfoque+
+    (caps.torch?' · linterna sí':' · linterna no');
 }
 
 /**
@@ -528,6 +587,7 @@ function detenerEscaneo(){
   $('btnLinterna').textContent='🔦 Linterna';
   $('btnLinterna').classList.add('oculto');
   $('visor').classList.add('oculto');
+  $('selectorCamara').classList.add('oculto');
   mostrarBotonesEscaneo(false);
 
   if(stream){
