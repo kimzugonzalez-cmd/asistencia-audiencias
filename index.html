@@ -63,6 +63,11 @@
   #toast.exito{background:var(--ok)} #toast.error{background:var(--error)}
   .centro{text-align:center}
   a{color:var(--azul)}
+  .pasos{margin-top:1rem;background:#f8fafc;border:1px solid var(--borde);
+         border-radius:10px;padding:.85rem 1rem;font-size:.88rem;line-height:1.5}
+  .pasos strong{color:var(--azul)}
+  .pasos ol{margin:.5rem 0 0;padding-left:1.2rem}
+  .pasos li{margin-bottom:.35rem}
 </style>
 </head>
 <body>
@@ -92,11 +97,32 @@
       <select id="selCaso"></select>
 
       <div class="botones">
-        <button id="btnEscanear" class="primario grande">📷 Escanear cédula</button>
+        <button id="btnPortapapeles" class="primario grande">📋 Registrar código copiado</button>
+        <button id="btnEscanear" class="secundario">📷 Escanear con la cámara</button>
         <button id="btnFoto" class="secundario">📸 Tomar foto del código</button>
         <button id="btnDetener" class="secundario oculto">Cancelar escaneo</button>
         <button id="btnLinterna" class="secundario oculto">🔦 Linterna</button>
         <button id="btnManual" class="secundario">✍️ Registro manual (sin cédula)</button>
+      </div>
+
+      <div class="pasos">
+        <strong>Cómo se registra en tres toques</strong>
+        <ol>
+          <li>Abre la <strong>cámara normal</strong> del teléfono y apunta al reverso de la cédula.</li>
+          <li>La cámara detecta el código y muestra el texto abajo: tócalo y elige <strong>Copiar</strong>.</li>
+          <li>Vuelve aquí y toca <strong>Registrar código copiado</strong>.</li>
+        </ol>
+        <p class="meta" style="margin:.4rem 0 0">El lector de códigos de Samsung solo funciona con la cámara abierta directamente — desde el navegador queda desactivado. Por eso este camino es el más confiable.</p>
+      </div>
+
+      <div id="panelPegado" class="oculto" style="margin-top:.9rem">
+        <label for="textoPegado">Pega aquí el código (mantén presionado y elige Pegar)</label>
+        <textarea id="textoPegado" rows="3" autocomplete="off"
+          style="width:100%;box-sizing:border-box;font-family:inherit;font-size:.95rem;padding:.6rem;border:1px solid var(--borde);border-radius:8px"></textarea>
+        <div class="botones">
+          <button id="btnRegistrarPegado" class="primario">Registrar</button>
+          <button id="btnCancelarPegado" class="secundario">Cancelar</button>
+        </div>
       </div>
 
       <div id="selectorCamara" class="oculto">
@@ -204,7 +230,7 @@ const URL_API = 'https://script.google.com/macros/s/AKfycbxz4xj87tQo1fq1LBj6lhmN
 
 /* Se muestra en pantalla para saber de un vistazo si el teléfono cargó la
    versión nueva o se quedó con una copia vieja en caché. Súbelo siempre. */
-const VERSION = 'v7';
+const VERSION = 'v8';
 
 /**
  * Registro de lo que va pasando al decodificar. Se muestra en pantalla porque
@@ -849,12 +875,70 @@ async function leerDeImagen(archivo){
   return null;
 }
 
-/* ---------- pegado manual: solo como salida de emergencia ---------- */
+/* ==========================================================================
+   Registro desde el portapapeles — el camino principal.
+
+   El lector de códigos de Samsung solo trabaja con la cámara abierta de forma
+   directa: al invocarla desde otra aplicación queda desactivado ("Escanear
+   códigos QR: no disponible al utilizar la cámara a través de otra
+   aplicación"). En vez de pelear con el decodificador dentro del navegador,
+   se aprovecha el del sistema — la persona copia el texto que la cámara ya
+   leyó y aquí se registra con un toque.
+   ========================================================================== */
+
+/** El código de una cédula empieza por el número y trae campos separados por "|". */
+function pareceCodigoCedula(texto){
+  return /^\s*(PE|E|N|\d{1,2})\s*-\s*\d{1,5}\s*-\s*\d{1,6}\s*\|/i.test(texto||'');
+}
+
+function abrirPanelPegado(prellenado){
+  $('panelPegado').classList.remove('oculto');
+  const campo=$('textoPegado');
+  campo.value=prellenado||'';
+  campo.focus();
+  $('panelPegado').scrollIntoView({behavior:'smooth'});
+}
+
+$('btnPortapapeles').addEventListener('click', async ()=>{
+  if(!idCaso()) return toast('Primero selecciona un caso.','error');
+
+  let texto='';
+  try{
+    if(navigator.clipboard && navigator.clipboard.readText){
+      texto=((await navigator.clipboard.readText())||'').trim();
+    }
+  }catch(e){ texto=''; }
+
+  if(!texto){
+    toast('No pude leer el portapapeles. Pega el código aquí abajo.','error');
+    return abrirPanelPegado('');
+  }
+  if(!pareceCodigoCedula(texto)){
+    toast('Lo copiado no parece el código de una cédula: «'+texto.slice(0,30)+'…». Revísalo abajo.','error');
+    return abrirPanelPegado(texto);
+  }
+  onCodigoLeido(texto);
+});
+
+$('btnRegistrarPegado').addEventListener('click',()=>{
+  const texto=$('textoPegado').value.trim();
+  if(!texto) return toast('Pega el código primero.','error');
+  if(!pareceCodigoCedula(texto) &&
+     !confirm('Ese texto no tiene la forma del código de una cédula. ¿Registrar de todos modos?')) return;
+  $('panelPegado').classList.add('oculto');
+  $('textoPegado').value='';
+  onCodigoLeido(texto);
+});
+
+$('btnCancelarPegado').addEventListener('click',()=>{
+  $('panelPegado').classList.add('oculto');
+  $('textoPegado').value='';
+});
+
 $('btnPegar').addEventListener('click',(e)=>{
   e.preventDefault();
   if(!idCaso()) return toast('Primero selecciona un caso.','error');
-  const codigo=(window.prompt('Pega aquí el código leído de la cédula:')||'').trim();
-  if(codigo) onCodigoLeido(codigo);
+  abrirPanelPegado('');
 });
 
 /* ---------- resultado del escaneo ---------- */
